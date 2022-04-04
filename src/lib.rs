@@ -1,9 +1,10 @@
 use nom::{
-    count, do_parse,
+    bytes::streaming::{tag, take},
+    combinator::{map, peek},
     error::VerboseError,
-    map, named,
+    multi::count,
     number::streaming::{be_u16, le_u16, le_u32, le_u8},
-    peek, switch, tag, take,
+    IResult,
 };
 use std::convert::TryInto;
 
@@ -30,17 +31,46 @@ fn parse_vendor(v: u16) -> [char; 3] {
     ];
 }
 
-named!(parse_header<&[u8], Header, VerboseError<&[u8]>>, do_parse!(
-    tag!(&[0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00][..])
-    >> vendor: be_u16
-    >> product: le_u16
-    >> serial: le_u32
-    >> week: le_u8
-    >> year: le_u8
-    >> version: le_u8
-    >> revision: le_u8
-    >> (Header{vendor: parse_vendor(vendor), product, serial, week, year, version, revision})
-));
+fn parse_header(input: &[u8]) -> IResult<&[u8], Header, VerboseError<&[u8]>> {
+    let mut remaining = input;
+
+    let _tag;
+    (remaining, _tag) = tag(&[0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00][..])(remaining)?;
+
+    let vendor;
+    (remaining, vendor) = map(be_u16, parse_vendor)(remaining)?;
+
+    let product;
+    (remaining, product) = le_u16(remaining)?;
+
+    let serial;
+    (remaining, serial) = le_u32(remaining)?;
+
+    let week;
+    (remaining, week) = le_u8(remaining)?;
+
+    let year;
+    (remaining, year) = le_u8(remaining)?;
+
+    let version;
+    (remaining, version) = le_u8(remaining)?;
+
+    let revision;
+    (remaining, revision) = le_u8(remaining)?;
+
+    Ok((
+        remaining,
+        Header {
+            vendor,
+            product,
+            serial,
+            week,
+            year,
+            version,
+            revision,
+        },
+    ))
+}
 
 #[derive(Debug, PartialEq, Copy, Clone)]
 pub struct Display {
@@ -51,38 +81,66 @@ pub struct Display {
     pub features: u8,
 }
 
-named!(parse_display<&[u8], Display, VerboseError<&[u8]>>, do_parse!(
-    video_input: le_u8
-    >> width: le_u8
-    >> height: le_u8
-    >> gamma: le_u8
-    >> features: le_u8
-    >> (Display{video_input, width, height, gamma, features})
-));
+fn parse_display(input: &[u8]) -> IResult<&[u8], Display, VerboseError<&[u8]>> {
+    let mut remaining = input;
 
-named!(parse_chromaticity<&[u8], (), VerboseError<&[u8]>>, do_parse!(
-    take!(10) >> ()
-));
+    let video_input;
+    (remaining, video_input) = le_u8(remaining)?;
 
-named!(parse_established_timing<&[u8], (), VerboseError<&[u8]>>, do_parse!(
-    take!(3) >> ()
-));
+    let width;
+    (remaining, width) = le_u8(remaining)?;
 
-named!(parse_standard_timing<&[u8], (), VerboseError<&[u8]>>, do_parse!(
-    take!(16) >> ()
-));
+    let height;
+    (remaining, height) = le_u8(remaining)?;
 
-named!(parse_descriptor_text<&[u8], String, VerboseError<&[u8]>>,
-    map!(
-        map!(take!(13), |b| {
-            b.iter()
+    let gamma;
+    (remaining, gamma) = le_u8(remaining)?;
+
+    let features;
+    (remaining, features) = le_u8(remaining)?;
+
+    Ok((
+        remaining,
+        Display {
+            video_input,
+            width,
+            height,
+            gamma,
+            features,
+        },
+    ))
+}
+// named!(parse_display<&[u8], Display, VerboseError<&[u8]>>, do_parse!(
+//     video_input: le_u8
+//     >> width: le_u8
+//     >> height: le_u8
+//     >> gamma: le_u8
+//     >> features: le_u8
+//     >> (Display{video_input, width, height, gamma, features})
+// ));
+
+fn parse_chromaticity(input: &[u8]) -> IResult<&[u8], (), VerboseError<&[u8]>> {
+    map(take(10u8), |_bytes| ())(input)
+}
+
+fn parse_established_timing(input: &[u8]) -> IResult<&[u8], (), VerboseError<&[u8]>> {
+    map(take(3u8), |_bytes| ())(input)
+}
+
+fn parse_standard_timing(input: &[u8]) -> IResult<&[u8], (), VerboseError<&[u8]>> {
+    map(take(16u8), |_bytes| ())(input)
+}
+
+fn parse_descriptor_text(input: &[u8]) -> IResult<&[u8], String, VerboseError<&[u8]>> {
+    map(take(13u8), |b: &[u8]| {
+        b.iter()
             .filter(|c| **c != 0x0A)
             .map(|b| cp437::forward(*b))
             .collect::<String>()
-        }),
-        |s| s.trim().to_string()
-    )
-);
+            .trim()
+            .to_string()
+    })(input)
+}
 
 #[derive(Debug, PartialEq, Copy, Clone)]
 pub struct DetailedTiming {
@@ -107,49 +165,123 @@ pub struct DetailedTiming {
     pub features: u8, /* TODO add enums etc. */
 }
 
-named!(parse_detailed_timing<&[u8], DetailedTiming, VerboseError<&[u8]>>, do_parse!(
-    pixel_clock_10khz: le_u16
-    >> horizontal_active_lo: le_u8
-    >> horizontal_blanking_lo: le_u8
-    >> horizontal_px_hi: le_u8
-    >> vertical_active_lo: le_u8
-    >> vertical_blanking_lo: le_u8
-    >> vertical_px_hi: le_u8
-    >> horizontal_front_porch_lo: le_u8
-    >> horizontal_sync_width_lo: le_u8
-    >> vertical_lo: le_u8
-    >> porch_sync_hi: le_u8
-    >> horizontal_size_lo: le_u8
-    >> vertical_size_lo: le_u8
-    >> size_hi: le_u8
-    >> horizontal_border: le_u8
-    >> vertical_border: le_u8
-    >> features: le_u8
-    >> (DetailedTiming {
-        pixel_clock: pixel_clock_10khz as u32 * 10,
-        horizontal_active_pixels: (horizontal_active_lo as u16) |
-                                  (((horizontal_px_hi >> 4) as u16) << 8),
-        horizontal_blanking_pixels: (horizontal_blanking_lo as u16) |
-                                    (((horizontal_px_hi & 0xf) as u16) << 8),
-        vertical_active_lines: (vertical_active_lo as u16) |
-                               (((vertical_px_hi >> 4) as u16) << 8),
-        vertical_blanking_lines: (vertical_blanking_lo as u16) |
-                                 (((vertical_px_hi & 0xf) as u16) << 8),
-        horizontal_front_porch: (horizontal_front_porch_lo as u16) |
-                                (((porch_sync_hi >> 6) as u16) << 8),
-        horizontal_sync_width: (horizontal_sync_width_lo as u16) |
-                               ((((porch_sync_hi >> 4) & 0x3) as u16) << 8),
-        vertical_front_porch: ((vertical_lo >> 4) as u16) |
-                              ((((porch_sync_hi >> 2) & 0x3) as u16) << 8),
-        vertical_sync_width: ((vertical_lo & 0xf) as u16) |
-                             (((porch_sync_hi & 0x3) as u16) << 8),
-        horizontal_size: (horizontal_size_lo as u16) | (((size_hi >> 4) as u16) << 8),
-        vertical_size: (vertical_size_lo as u16) | (((size_hi & 0xf) as u16) << 8),
-        horizontal_border_pixels: horizontal_border,
-        vertical_border_pixels: vertical_border,
-        features: features
-    })
-));
+fn parse_detailed_timing(input: &[u8]) -> IResult<&[u8], DetailedTiming, VerboseError<&[u8]>> {
+    let mut remaining = input;
+
+    let pixel_clock = {
+        let pixel_clock_10khz;
+        (remaining, pixel_clock_10khz) = le_u16(remaining)?;
+        u32::from(pixel_clock_10khz) * 10
+    };
+
+    let horizontal_active_pixels;
+    let horizontal_blanking_pixels;
+    {
+        let horizontal_active_lo;
+        (remaining, horizontal_active_lo) = le_u8(remaining)?;
+
+        let horizontal_blanking_lo;
+        (remaining, horizontal_blanking_lo) = le_u8(remaining)?;
+
+        let horizontal_px_hi;
+        (remaining, horizontal_px_hi) = le_u8(remaining)?;
+
+        horizontal_active_pixels =
+            (horizontal_active_lo as u16) | (((horizontal_px_hi >> 4) as u16) << 8);
+
+        horizontal_blanking_pixels =
+            (horizontal_blanking_lo as u16) | (((horizontal_px_hi & 0xf) as u16) << 8);
+    }
+
+    let vertical_active_lines;
+    let vertical_blanking_lines;
+    {
+        let vertical_active_lo;
+        (remaining, vertical_active_lo) = le_u8(remaining)?;
+
+        let vertical_blanking_lo;
+        (remaining, vertical_blanking_lo) = le_u8(remaining)?;
+
+        let vertical_px_hi;
+        (remaining, vertical_px_hi) = le_u8(remaining)?;
+
+        vertical_active_lines = (vertical_active_lo as u16) | (((vertical_px_hi >> 4) as u16) << 8);
+
+        vertical_blanking_lines =
+            (vertical_blanking_lo as u16) | (((vertical_px_hi & 0xf) as u16) << 8);
+    }
+
+    let horizontal_front_porch;
+    let horizontal_sync_width;
+    let vertical_front_porch;
+    let vertical_sync_width;
+    {
+        let horizontal_front_porch_lo;
+        (remaining, horizontal_front_porch_lo) = le_u8(remaining)?;
+
+        let horizontal_sync_width_lo;
+        (remaining, horizontal_sync_width_lo) = le_u8(remaining)?;
+
+        let vertical_lo;
+        (remaining, vertical_lo) = le_u8(remaining)?;
+
+        let porch_sync_hi;
+        (remaining, porch_sync_hi) = le_u8(remaining)?;
+
+        horizontal_front_porch =
+            (horizontal_front_porch_lo as u16) | (((porch_sync_hi >> 6) as u16) << 8);
+        horizontal_sync_width =
+            (horizontal_sync_width_lo as u16) | ((((porch_sync_hi >> 4) & 0x3) as u16) << 8);
+        vertical_front_porch =
+            ((vertical_lo >> 4) as u16) | ((((porch_sync_hi >> 2) & 0x3) as u16) << 8);
+        vertical_sync_width = ((vertical_lo & 0xf) as u16) | (((porch_sync_hi & 0x3) as u16) << 8);
+    }
+
+    let horizontal_size;
+    let vertical_size;
+    {
+        let horizontal_size_lo;
+        (remaining, horizontal_size_lo) = le_u8(remaining)?;
+
+        let vertical_size_lo;
+        (remaining, vertical_size_lo) = le_u8(remaining)?;
+
+        let size_hi;
+        (remaining, size_hi) = le_u8(remaining)?;
+
+        horizontal_size = (horizontal_size_lo as u16) | (((size_hi >> 4) as u16) << 8);
+        vertical_size = (vertical_size_lo as u16) | (((size_hi & 0xf) as u16) << 8);
+    }
+
+    let horizontal_border_pixels;
+    (remaining, horizontal_border_pixels) = le_u8(remaining)?;
+
+    let vertical_border_pixels;
+    (remaining, vertical_border_pixels) = le_u8(remaining)?;
+
+    let features;
+    (remaining, features) = le_u8(remaining)?;
+
+    Ok((
+        remaining,
+        DetailedTiming {
+            pixel_clock,
+            horizontal_active_pixels,
+            horizontal_blanking_pixels,
+            vertical_active_lines,
+            vertical_blanking_lines,
+            horizontal_front_porch,
+            horizontal_sync_width,
+            vertical_front_porch,
+            vertical_sync_width,
+            horizontal_size,
+            vertical_size,
+            horizontal_border_pixels,
+            vertical_border_pixels,
+            features,
+        },
+    ))
+}
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Descriptor {
@@ -167,75 +299,55 @@ pub enum Descriptor {
     Unknown([u8; 13]),
 }
 
-named!(parse_descriptor<&[u8], Descriptor, VerboseError<&[u8]>>,
-    switch!(peek!(le_u16),
-        0 => do_parse!(
-            take!(3)
-            >> d: switch!(le_u8,
-                0xFF => do_parse!(
-                    take!(1)
-                    >> s: parse_descriptor_text
-                    >> (Descriptor::SerialNumber(s))
-                ) |
-                0xFE => do_parse!(
-                    take!(1)
-                    >> s: parse_descriptor_text
-                    >> (Descriptor::UnspecifiedText(s))
-                ) |
-                0xFD => do_parse!(
-                    take!(1)
-                    >> take!(13)
-                    >> (Descriptor::RangeLimits)
-                ) |
-                0xFC => do_parse!(
-                    take!(1)
-                    >> s: parse_descriptor_text
-                    >> (Descriptor::ProductName(s))
-                ) |
-                0xFB => do_parse!(
-                    take!(1)
-                    >> take!(13)
-                    >> (Descriptor::WhitePoint)
-                ) |
-                0xFA => do_parse!(
-                    take!(1)
-                    >> take!(13)
-                    >> (Descriptor::StandardTiming)
-                ) |
-                0xF9 => do_parse!(
-                    take!(1)
-                    >> take!(13)
-                    >> (Descriptor::ColorManagement)
-                ) |
-                0xF8 => do_parse!(
-                    take!(1)
-                    >> take!(13)
-                    >> (Descriptor::TimingCodes)
-                ) |
-                0xF7 => do_parse!(
-                    take!(1)
-                    >> take!(13)
-                    >> (Descriptor::EstablishedTimings)
-                ) |
-                0x10 => do_parse!(
-                    take!(1)
-                    >> take!(13)
-                    >> (Descriptor::Dummy)
-                ) |
-                _ => do_parse!(
-                    take!(1)
-                    >> data: take!(13)
-                    >> (Descriptor::Unknown(data.try_into().unwrap()))
-                )
-            )
-            >> (d)
-        ) |
-        _ => do_parse!(
-            d: parse_detailed_timing
-            >> (Descriptor::DetailedTiming(d))
-        )
-    )
-);
+fn parse_descriptor(input: &[u8]) -> IResult<&[u8], Descriptor, VerboseError<&[u8]>> {
+    let mut remaining = input;
+
+    let peeked;
+    (remaining, peeked) = peek(le_u16)(remaining)?;
+
+    match peeked {
+        0 => {
+            let _discarded; // TODO: What is this? Is this useful?
+            (remaining, _discarded) = take(3u8)(remaining)?;
+
+            let discriminant; // TODO: Describe this better! Why is this a discriminant?
+            (remaining, discriminant) = le_u8(remaining)?;
+
+            let _discarded; // TODO: What is this? Is this useful?
+            (remaining, _discarded) = le_u8(remaining)?;
+
+            match discriminant {
+                0xFF => map(parse_descriptor_text, |s| Descriptor::SerialNumber(s))(remaining),
+                0xFE => map(parse_descriptor_text, |s| Descriptor::UnspecifiedText(s))(remaining),
+                // TODO: Parse this maybe?
+                0xFD => map(take(13u8), |_discarded: &[u8]| Descriptor::RangeLimits)(remaining),
+                0xFC => map(parse_descriptor_text, |s| Descriptor::ProductName(s))(remaining),
+                // TODO: Parse this maybe?
+                0xFB => map(take(13u8), |_discarded: &[u8]| Descriptor::WhitePoint)(remaining),
+                // TODO: Parse this maybe?
+                0xFA => map(take(13u8), |_discarded: &[u8]| Descriptor::StandardTiming)(remaining),
+                // TODO: Parse this maybe?
+                0xF9 => map(take(13u8), |_discarded: &[u8]| Descriptor::ColorManagement)(remaining),
+                // TODO: Parse this maybe?
+                0xF8 => map(take(13u8), |_discarded: &[u8]| Descriptor::TimingCodes)(remaining),
+                // TODO: Parse this maybe?
+                0xF7 => map(take(13u8), |_discarded: &[u8]| {
+                    Descriptor::EstablishedTimings
+                })(remaining),
+                // TODO: Parse this maybe?
+                0x10 => map(take(13u8), |_discarded: &[u8]| Descriptor::Dummy)(remaining),
+                _ => map(take(13u8), |data: &[u8]| {
+                    Descriptor::Unknown(data.try_into().unwrap())
+                })(remaining),
+            }
+        }
+        _ => {
+            let detailed_timing;
+            (remaining, detailed_timing) = parse_detailed_timing(remaining)?;
+            Ok((remaining, Descriptor::DetailedTiming(detailed_timing)))
+        }
+    }
+}
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct EDID {
@@ -247,17 +359,45 @@ pub struct EDID {
     pub descriptors: Vec<Descriptor>,
 }
 
-named!(parse_edid<&[u8], EDID, VerboseError<&[u8]>>, do_parse!(
-    header: parse_header
-    >> display: parse_display
-    >> chromaticity: parse_chromaticity
-    >> established_timing: parse_established_timing
-    >> standard_timing: parse_standard_timing
-    >> descriptors: count!(parse_descriptor, 4)
-    >> take!(1) // number of extensions
-    >> take!(1) // checksum
-    >> (EDID{header, display, chromaticity, established_timing, standard_timing, descriptors})
-));
+fn parse_edid(input: &[u8]) -> IResult<&[u8], EDID, VerboseError<&[u8]>> {
+    let mut remaining = input;
+
+    let header;
+    (remaining, header) = parse_header(remaining)?;
+
+    let display;
+    (remaining, display) = parse_display(remaining)?;
+
+    let chromaticity;
+    (remaining, chromaticity) = parse_chromaticity(remaining)?;
+
+    let established_timing;
+    (remaining, established_timing) = parse_established_timing(remaining)?;
+
+    let standard_timing;
+    (remaining, standard_timing) = parse_standard_timing(remaining)?;
+
+    let descriptors;
+    (remaining, descriptors) = count(parse_descriptor, 4)(remaining)?;
+
+    let _number_of_extensions;
+    (remaining, _number_of_extensions) = take(1u8)(remaining)?;
+
+    let _checksum;
+    (remaining, _checksum) = take(1u8)(remaining)?;
+
+    Ok((
+        remaining,
+        EDID {
+            header,
+            display,
+            chromaticity,
+            established_timing,
+            standard_timing,
+            descriptors,
+        },
+    ))
+}
 
 pub fn parse(data: &[u8]) -> nom::IResult<&[u8], EDID, VerboseError<&[u8]>> {
     parse_edid(data)
