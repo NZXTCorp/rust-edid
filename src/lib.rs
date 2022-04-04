@@ -1,7 +1,11 @@
-#[macro_use]
-extern crate nom;
-
-use nom::{be_u16, le_u16, le_u32, le_u8};
+use nom::{
+    count, do_parse,
+    error::VerboseError,
+    map, named,
+    number::streaming::{be_u16, le_u16, le_u32, le_u8},
+    peek, switch, tag, take,
+};
+use std::convert::TryInto;
 
 mod cp437;
 
@@ -26,7 +30,7 @@ fn parse_vendor(v: u16) -> [char; 3] {
     ];
 }
 
-named!(parse_header<&[u8], Header>, do_parse!(
+named!(parse_header<&[u8], Header, VerboseError<&[u8]>>, do_parse!(
     tag!(&[0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00][..])
     >> vendor: be_u16
     >> product: le_u16
@@ -47,7 +51,7 @@ pub struct Display {
     pub features: u8,
 }
 
-named!(parse_display<&[u8], Display>, do_parse!(
+named!(parse_display<&[u8], Display, VerboseError<&[u8]>>, do_parse!(
     video_input: le_u8
     >> width: le_u8
     >> height: le_u8
@@ -56,19 +60,19 @@ named!(parse_display<&[u8], Display>, do_parse!(
     >> (Display{video_input, width, height, gamma, features})
 ));
 
-named!(parse_chromaticity<&[u8], ()>, do_parse!(
+named!(parse_chromaticity<&[u8], (), VerboseError<&[u8]>>, do_parse!(
     take!(10) >> ()
 ));
 
-named!(parse_established_timing<&[u8], ()>, do_parse!(
+named!(parse_established_timing<&[u8], (), VerboseError<&[u8]>>, do_parse!(
     take!(3) >> ()
 ));
 
-named!(parse_standard_timing<&[u8], ()>, do_parse!(
+named!(parse_standard_timing<&[u8], (), VerboseError<&[u8]>>, do_parse!(
     take!(16) >> ()
 ));
 
-named!(parse_descriptor_text<&[u8], String>,
+named!(parse_descriptor_text<&[u8], String, VerboseError<&[u8]>>,
     map!(
         map!(take!(13), |b| {
             b.iter()
@@ -103,7 +107,7 @@ pub struct DetailedTiming {
     pub features: u8, /* TODO add enums etc. */
 }
 
-named!(parse_detailed_timing<&[u8], DetailedTiming>, do_parse!(
+named!(parse_detailed_timing<&[u8], DetailedTiming, VerboseError<&[u8]>>, do_parse!(
     pixel_clock_10khz: le_u16
     >> horizontal_active_lo: le_u8
     >> horizontal_blanking_lo: le_u8
@@ -163,7 +167,7 @@ pub enum Descriptor {
     Unknown([u8; 13]),
 }
 
-named!(parse_descriptor<&[u8], Descriptor>,
+named!(parse_descriptor<&[u8], Descriptor, VerboseError<&[u8]>>,
     switch!(peek!(le_u16),
         0 => do_parse!(
             take!(3)
@@ -220,8 +224,8 @@ named!(parse_descriptor<&[u8], Descriptor>,
                 ) |
                 _ => do_parse!(
                     take!(1)
-                    >> data: count_fixed!(u8, le_u8, 13)
-                    >> (Descriptor::Unknown(data))
+                    >> data: take!(13)
+                    >> (Descriptor::Unknown(data.try_into().unwrap()))
                 )
             )
             >> (d)
@@ -243,7 +247,7 @@ pub struct EDID {
     pub descriptors: Vec<Descriptor>,
 }
 
-named!(parse_edid<&[u8], EDID>, do_parse!(
+named!(parse_edid<&[u8], EDID, VerboseError<&[u8]>>, do_parse!(
     header: parse_header
     >> display: parse_display
     >> chromaticity: parse_chromaticity
@@ -255,7 +259,7 @@ named!(parse_edid<&[u8], EDID>, do_parse!(
     >> (EDID{header, display, chromaticity, established_timing, standard_timing, descriptors})
 ));
 
-pub fn parse(data: &[u8]) -> nom::IResult<&[u8], EDID> {
+pub fn parse(data: &[u8]) -> nom::IResult<&[u8], EDID, VerboseError<&[u8]>> {
     parse_edid(data)
 }
 
@@ -265,15 +269,12 @@ mod tests {
 
     fn test(d: &[u8], expected: &EDID) {
         match parse(d) {
-            nom::IResult::Done(remaining, parsed) => {
+            Ok((remaining, parsed)) => {
                 assert_eq!(remaining.len(), 0);
                 assert_eq!(&parsed, expected);
             }
-            nom::IResult::Error(err) => {
+            Err(err) => {
                 panic!("{}", err);
-            }
-            nom::IResult::Incomplete(_) => {
-                panic!("Incomplete");
             }
         }
     }

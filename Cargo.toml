@@ -12,7 +12,4 @@ authors = ["emersion"]
 edition = "2018"
 
 [dependencies]
-
-[dependencies.nom]
-version = "3.2.0"
-features = ["verbose-errors"]
+nom = "5.1.2"
