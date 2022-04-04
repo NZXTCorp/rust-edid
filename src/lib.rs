@@ -8,6 +8,10 @@ use nom::{
 };
 use std::convert::TryInto;
 
+pub mod reexport {
+    pub use nom;
+}
+
 mod cp437;
 
 #[derive(Debug, PartialEq, Copy, Clone)]
