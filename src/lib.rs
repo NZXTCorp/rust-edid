@@ -1,7 +1,7 @@
-#[macro_use]
-extern crate nom;
-
-use nom::{be_u16, le_u16, le_u32, le_u8};
+use nom::{
+    be_u16, call, count, count_fixed, do_parse, error_node_position, error_position, le_u16,
+    le_u32, le_u8, map, named, peek, switch, tag, take,
+};
 
 pub mod reexport {
     pub use nom;
