@@ -3,6 +3,10 @@ extern crate nom;
 
 use nom::{be_u16, le_u16, le_u32, le_u8};
 
+pub mod reexport {
+    pub use nom;
+}
+
 mod cp437;
 
 #[derive(Debug, PartialEq, Copy, Clone)]
